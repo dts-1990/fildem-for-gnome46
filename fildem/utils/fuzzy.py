@@ -9,8 +9,8 @@ def match_replace(pattern, replacement, text):
 
 
 def normalize_string(string):
-	string = match_replace('[^\w]', ' ', string)
-	string = match_replace('\s+', ' ', string)
+	string = match_replace(r'[^\w]', ' ', string)
+	string = match_replace(r'\s+', ' ', string)
 
 	return string.lower().strip()
 
