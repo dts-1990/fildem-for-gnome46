@@ -1,88 +1,110 @@
-# Fildem
+# Fildem Global Menu (on Panel) for GNOME 46
 
-## Global menu for Gnome
+This is a fork/updated version of the Fildem Global Menu, patched to work with modern Python versions (3.12+) and GNOME 46.
 
-[![Buy Me A Coffee](https://img.shields.io/badge/buy%20me%20a%20coffee-donate-yellow.svg)](https://buymeacoffee.com/gonza)
-
+Example:
 ![Fildem](https://user-images.githubusercontent.com/19943481/95288612-1d272a80-083f-11eb-9400-be88f61e054d.png)
 
-This project is a fork of gnomehud with the addition of a global menu bar. It consists of a Gnome Shell extension and an external program, you must install both for the application to work.
+## Prerequisites
 
-You can also bring a HUD menu with Alt + Space (on Xorg).
+### 1. Install System Dependencies
+Install the required libraries for menu exporting and keybinding.
 
-This is a prototype, as I don’t know if people will like it or how long it will last until devs nuke it, so feel free to let me know your opinion.
+**Zorin OS/Ubuntu/Debian/Mint:**
+```bash
+sudo apt install bamfdaemon gir1.2-bamf-3 libbamf3-2 libkeybinder-3.0-0 gir1.2-keybinder-3.0 appmenu-gtk2-module appmenu-gtk3-module unity-gtk-module-common python3-pip git
+```
+
+### 2. Install Python Dependencies
+Modern systems require a few specific python packages. Note the use of `--break-system-packages` if you are on a managed distribution like Ubuntu 24.04+, otherwise you can omit it.
+
+```bash
+sudo pip install future fuzzysearch --break-system-packages
+```
 
 ## Installation
 
-### Extension
+### 1. Install the Fildem Backend
+Navigate to this directory in your terminal and install the python module.
 
-To install the extension, download it from the [Gnome extensions website](https://extensions.gnome.org/extension/4114/fildem-global-menu/).
-
-### Ubuntu
-
-Download the .deb file from the releases section and run `sudo apt install ./fildem_*.deb`
-
-### Arch
-
-Download the .zst file from the releases section and run `sudo pacman -U ./python3-fildem*.zst`
-
-## Configuration
-
-In order for the application to work, you must configure the following files (applies to all operating systems):
-
-- Create the file `~/.gtkrc-2.0` and append `gtk-modules="appmenu-gtk-module"`
-- The file `~/.config/gtk-3.0/settings.ini` should have the line `gtk-modules="appmenu-gtk-module"` under [Settings]. If it doesn’t exist create it and paste the following
-
-```
-[Settings]
-gtk-modules="appmenu-gtk-module"
+```bash
+cd ~/codes/fildem-for-gnome46
+sudo pip install . --break-system-packages
 ```
 
-## Running
+### 2. Install the GNOME Shell Extension
+Copy the extension folder to your local extensions directory.
 
-After installation you’ll have two executables, `fildem` and `fildem-hud`.  To check if it works use the first one. `fildem-hud` is for using the HUD, if you are on Xorg, you already have it bound to Alt + Space. If you are on Wayland, you can bind some keybinding to that command.
-
-## Customization
-
-### Menu always visible
-
-By default, the menu is visible when you hover the mouse on the panel. If you want the menu to be always visible, unselect “Show menu only when the mouse is over the panel” in the preferences of the extension.
-
-### AppMenu Button always visible
-
-The AppMenu button shows the application name or window title (if you have some extension) in the panel. By default, the fildem extension hides that label when the menu is being shown. If you want it to be always visible, you can unselect “Hide App Menu label” in the preferences of the extension.
-
-### Reduce space between buttons
-
-If the menu shown on the panel is shifted with relation to the one that appears, like this:
-
-![Screenshot from 2021-06-17 11-09-00](https://user-images.githubusercontent.com/864630/122452193-da852880-cf5d-11eb-8ca8-27e481ab682c.png)
-
-you can tweak the "Button padding" in the preferences window of the extension (accessible from the tweak tool).
-
-### Remove space in between buttons
-
-In some gnome themes, the buttons have a small spacing between them. This can make the buttons easy to miss and unfocusing our window if it’s not maximized. To fix this, add this somewhere on your `gnome-shell.css` theme:
-
-```
-#panel #panelLeft {
-  spacing: 0px; }
-#panel #panelLeft .panel-button {
-  spacing: 0px; }
+```bash
+rm -rf ~/.local/share/gnome-shell/extensions/fildemGMenu@gonza.com
+cp -r fildemGMenu@gonza.com ~/.local/share/gnome-shell/extensions/
 ```
 
-## Running the program at startup
+After copying, **Log Out and Log Back In** (on X11 you can press `Alt+F2`, type `r`, and enter).
+Then enable the extension:
+```bash
+gnome-extensions enable fildemGMenu@gonza.com
+```
 
-If you manage to make the program work and want to have it running automatically at startup you can add an entry to `gnome-session-properties` with the name of the program and the path to execute it.
+## Configuration (Required)
 
-## Create a shortcut for the HUD on Wayland
+For the global menu to actually appear, applications must be told to export their menus.
 
-Since it’s not possible to create a shortcut from the app on Wayland, you have to create it yourself. Go to Settings → Keyboard Shorcuts and create a shortcut that executes `inithud.sh`.
+### 1. GTK 3 Configuration
+Create or edit `~/.config/gtk-3.0/settings.ini`:
+
+```bash
+mkdir -p ~/.config/gtk-3.0
+printf "[Settings]\ngtk-modules=appmenu-gtk-module\n" > ~/.config/gtk-3.0/settings.ini
+```
+*Note: If you already have a `[Settings]` section in that file, just add the `gtk-modules` line under it.*
+
+### 2. GTK 2 Configuration (Legacy)
+Create or edit `~/.gtkrc-2.0`:
+
+```bash
+echo 'gtk-modules="appmenu-gtk-module"' >> ~/.gtkrc-2.0
+```
+
+## Running & Autostart
+
+The menu requires a background service (`fildem`) to be running.
+
+### 1. Test it manually
+Run this in a terminal:
+```bash
+fildem
+```
+It should "hang" (show no output). Open a new application (like Text Editor or Files) and check if the menu appears in the top bar.
+
+### 2. Enable Autostart
+To make `fildem` start automatically when you log in, create a desktop entry:
+
+```bash
+mkdir -p ~/.config/autostart
+cat <<EOF > ~/.config/autostart/fildem.desktop
+[Desktop Entry]
+Type=Application
+Exec=fildem
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+Name=Fildem Global Menu
+Comment=Run Fildem backend
+EOF
+```
 
 ## State of the Apps
 
 To see a list of apps that work check [the wiki](https://github.com/gonzaarcr/Fildem/wiki/Using#state-of-the-apps)
 
-## Installation troubleshooting
+## Troubleshooting
 
-If you have any questions on how to get it to work, please don’t create an issue, use [this discussion](https://github.com/gonzaarcr/Fildem/discussions/33).
+*   **Menu not showing?**
+    Ensure `fildem` is running:
+    ```bash
+    ps aux | grep fildem
+    ```
+*   **App not showing menu?**
+    Some apps need to be restarted *after* the configuration files are created. A full full Log Out/Log In is recommended.
+
