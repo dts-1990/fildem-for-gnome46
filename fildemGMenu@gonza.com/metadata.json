@@ -1,13 +1,13 @@
 {
   "name": "Fildem global menu",
-  "description": "Global menu for Gnome",
+  "description": "Global menu for Gnome 46 by @sglbl and @gonzaarcr",
   "settings-schema": "org.gnome.shell.extensions.fildem-global-menu",
   "shell-version": [
-    "3.36",
-    "3.38",
-    "40",
-    "41",
-    "42"
+    "45",
+    "46",
+    "47",
+    "48",
+    "49"
   ],
   "url": "https://github.com/gonzaarcr/Fildem",
   "uuid": "fildemGMenu@gonza.com"
