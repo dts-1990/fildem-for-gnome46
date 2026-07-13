@@ -1,4 +1,5 @@
 import dbus
+import json
 
 from gi.repository import GLib
 
@@ -27,6 +28,8 @@ class DbusMenu:
 		self._init_window()
 		self._listen_menu_activated()
 		self._listen_hud_activated()
+		self._listen_menu_tree_requested()
+		self._listen_activate_menu_item()
 		WindowManager.add_listener(self.on_window_switched)
 
 	def _init_window(self):
@@ -54,6 +57,51 @@ class DbusMenu:
 	def _listen_hud_activated(self):
 		proxy = self.session.get_object(MyService.BUS_NAME, MyService.BUS_PATH)
 		signal = proxy.connect_to_signal("HudActivated", self.on_hud_activated)
+
+	def _listen_menu_tree_requested(self):
+		proxy = self.session.get_object(MyService.BUS_NAME, MyService.BUS_PATH)
+		signal = proxy.connect_to_signal("RequestMenuTreeSignal", self.on_menu_tree_requested)
+
+	def _listen_activate_menu_item(self):
+		proxy = self.session.get_object(MyService.BUS_NAME, MyService.BUS_PATH)
+		signal = proxy.connect_to_signal("ActivateMenuItemSignal", self.on_activate_menu_item)
+
+	def on_menu_tree_requested(self, label: str):
+		node = self._find_top_level_node(label)
+		children = self.tree.children(node.identifier) if node is not None else []
+		payload = [self._serialize_menu_node(c) for c in children]
+		self._send_menu_tree(label, json.dumps(payload))
+
+	def on_activate_menu_item(self, selection: str):
+		self.activate(selection)
+
+	def _find_top_level_node(self, label: str):
+		if self.tree.root is None:
+			return None
+		root = self.tree[self.tree.root]
+		for child in self.tree.children(root.identifier):
+			if child.data.label.replace('_', '') == label:
+				return child
+		return None
+
+	def _serialize_menu_node(self, node):
+		data = node.data
+		entry = {
+			'label': data.label,
+			'separator': bool(data.separator),
+			'enabled': bool(data.enabled),
+			'toggleType': data.toggle_type,
+			'toggleState': bool(data.toggle_state),
+			'selection': data.text,
+		}
+		children = self.tree.children(node.identifier)
+		if children:
+			entry['children'] = [self._serialize_menu_node(c) for c in children]
+		return entry
+
+	def _send_menu_tree(self, label: str, tree_json: str):
+		proxy = self.session.get_object(MyService.BUS_NAME, MyService.BUS_PATH)
+		proxy.EchoSendMenuTree(label, tree_json)
 
 	def on_menu_activated(self, menu: str, x: int):
 		if menu == '__fildem_move':

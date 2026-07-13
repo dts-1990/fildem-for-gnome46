@@ -122,3 +122,30 @@ class MyService(dbus.service.Object):
 	@dbus.service.signal(BUS_NAME)
 	def HudActivated(self):
 		pass
+
+	# Native (in-shell) menu rendering: extension asks for a top-level
+	# menu's contents, fildem replies with a JSON-serialized tree, and
+	# the extension reports back which item was clicked.
+	@dbus.service.method(BUS_NAME, in_signature='s')
+	def EchoRequestMenuTree(self, menu):
+		self.RequestMenuTreeSignal(menu)
+
+	@dbus.service.signal(BUS_NAME, signature='s')
+	def RequestMenuTreeSignal(self, menu):
+		pass
+
+	@dbus.service.method(BUS_NAME, in_signature='ss')
+	def EchoSendMenuTree(self, menu, tree_json):
+		self.SendMenuTreeSignal(menu, tree_json)
+
+	@dbus.service.signal(BUS_NAME, signature='ss')
+	def SendMenuTreeSignal(self, menu, tree_json):
+		pass
+
+	@dbus.service.method(BUS_NAME, in_signature='s')
+	def EchoActivateMenuItem(self, selection):
+		self.ActivateMenuItemSignal(selection)
+
+	@dbus.service.signal(BUS_NAME, signature='s')
+	def ActivateMenuItemSignal(self, selection):
+		pass

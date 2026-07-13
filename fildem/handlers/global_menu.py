@@ -7,8 +7,12 @@ gi.require_version('Gdk', '3.0')
 from gi.repository import Gtk
 from gi.repository import Gdk
 from gi.repository import Gio
+from gi.repository import GLib
 
 from fildem.utils.wayland import is_wayland
+
+MENU_FADE_DURATION_MS = 150
+MENU_FADE_STEPS = 15
 
 
 def get_separator():
@@ -51,6 +55,24 @@ class Menu(Gtk.Menu):
 		self.node = node
 		self.add_items(tree, node)
 		self.show_all()
+		self._init_fade_animation()
+
+	def _init_fade_animation(self):
+		self._fade_step = 0
+		self.set_opacity(0)
+		self.connect('map-event', self._on_map_event)
+
+	def _on_map_event(self, widget, event):
+		self._fade_step = 0
+		GLib.timeout_add(MENU_FADE_DURATION_MS // MENU_FADE_STEPS, self._animate_fade_in)
+		return False
+
+	def _animate_fade_in(self):
+		self._fade_step += 1
+		progress = min(self._fade_step / MENU_FADE_STEPS, 1.0)
+		eased = 1 - (1 - progress) ** 2  # ease-out quad
+		self.set_opacity(eased)
+		return progress < 1.0
 
 	def add_items(self, tree, node):
 		current_section = None

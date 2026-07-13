@@ -15,15 +15,17 @@ import { Extension as GExtension } from "resource:///org/gnome/shell/extensions/
 const WinTracker = Shell.WindowTracker.get_default();
 
 import { FildemGlobalMenuSettings as Settings } from './settings.js';
+import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as WindowMenu from 'resource:///org/gnome/shell/ui/windowMenu.js';
 
 
 function log(msg) {
 	const debug = true;
 	if (debug)
-		global.log('[FILDEM_MENU] ' + msg);
+		console.log('[FILDEM_MENU] ' + msg);
 }
 
 
@@ -212,6 +214,8 @@ class MenuButton extends PanelMenu.Button {
 		super._init(0.0, label);
 		this._label = label;
 		this._menuBar = menuBar;
+		this._debugId = `${label}-${Date.now()}`;
+		log(`[FILDEM_DEBUG] CREATE ${this._debugId}`);
 
 		this.box = new St.BoxLayout({style_class: 'panel-status-menu-box menubar-button'});
 		this.labelWidget = new St.Label({
@@ -221,7 +225,19 @@ class MenuButton extends PanelMenu.Button {
 		});
 		this.box.add_child(this.labelWidget);
 		this.add_child(this.box);
-		this.connect('button-release-event', this.onButtonEvent.bind(this));
+
+		this.menu.connect('open-state-changed', this._onOpenStateChanged.bind(this));
+	}
+
+	vfunc_event(event) {
+		if (event.type() === Clutter.EventType.BUTTON_PRESS || event.type() === Clutter.EventType.TOUCH_BEGIN)
+			log(`[FILDEM_DEBUG] PRESS ${this._debugId}`);
+		return super.vfunc_event(event);
+	}
+
+	destroy(...args) {
+		log(`[FILDEM_DEBUG] DESTROY ${this._debugId}`);
+		super.destroy(...args);
 	}
 
 	_onStyleChanged(actor) {
@@ -231,12 +247,47 @@ class MenuButton extends PanelMenu.Button {
 		this._natHPadding = padding;
 	}
 
-	onButtonEvent(actor, event) {
-		if (event.get_button() !== 1)
-			return Clutter.EVENT_PROPAGATE;
+	_onOpenStateChanged(menu, isOpen) {
+		log(`[FILDEM_DEBUG] OPEN_STATE ${this._debugId} isOpen=${isOpen}`);
 
-		this._menuBar.onButtonClicked(this._label);
-		return Clutter.EVENT_STOP;
+		if (isOpen && this.menu.isEmpty())
+			this._menuBar.requestMenuTree(this._label);
+
+		this._menuBar.onMenuOpenStateChanged();
+	}
+
+	populateMenu(items) {
+		this.menu.removeAll();
+		for (let item of items)
+			this._addMenuItem(this.menu, item);
+	}
+
+	_addMenuItem(parentMenu, item) {
+		if (item.separator) {
+			parentMenu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+			return;
+		}
+
+		let label = item.label.replace('_', '');
+
+		if (item.children && item.children.length > 0) {
+			let subMenuItem = new PopupMenu.PopupSubMenuMenuItem(label, false);
+			subMenuItem.setSensitive(item.enabled);
+			for (let child of item.children)
+				this._addMenuItem(subMenuItem.menu, child);
+			parentMenu.addMenuItem(subMenuItem);
+			return;
+		}
+
+		let menuItem = new PopupMenu.PopupMenuItem(label);
+		menuItem.setSensitive(item.enabled);
+		if (item.toggleType)
+			menuItem.setOrnament(item.toggleState ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
+
+		menuItem.connect('activate', () => {
+			this._menuBar.activateMenuItem(item.selection);
+		});
+		parentMenu.addMenuItem(menuItem);
 	}
 });
 
@@ -294,6 +345,7 @@ const MenuBar = class MenuBar {
 		this._notifyFocusWinId = global.display.connect('notify::focus-window', this._onWindowSwitched.bind(this));
 		this._proxy.listeners['SendTopLevelMenus'].push(this._cache.withCache(this.setMenus.bind(this)));
 		this._proxy.listeners['MenuOnOff'].push(this._onMenuOnOff.bind(this));
+		this._proxy.listeners['SendMenuTree'].push(this._onSendMenuTree.bind(this));
 		Main.panel.reactive = true;
 		Main.panel.track_hover = true;
 
@@ -355,8 +407,48 @@ const MenuBar = class MenuBar {
 			this.addMenuButton(menu, first);
 			first = false;
 		}
+		for (let button of this._menuButtons) {
+			this.requestMenuTree(button._label);
+		}
 		if (this._forceShowMenu && !Main.overview.visibleTarget) {
 			this._onPanelEnter();
+		}
+	}
+
+	requestMenuTree(label) {
+		this._proxy.RequestMenuTree(label);
+	}
+
+	activateMenuItem(selection) {
+		this._proxy.ActivateMenuItem(selection);
+	}
+
+	_onSendMenuTree(label, treeJson) {
+		let button = this._menuButtons.find(b => b._label === label);
+		if (!button)
+			return;
+
+		let items = [];
+		try {
+			items = JSON.parse(treeJson);
+		} catch (e) {
+			log(`Failed to parse menu tree for ${label}: ${e}`);
+		}
+
+		button.populateMenu(items);
+	}
+
+	onMenuOpenStateChanged() {
+		this._isShowingMenu = this._menuButtons.some(b => b.menu.isOpen);
+		if (!this._isShowingMenu) {
+			this._onPanelLeave();
+			// _onWindowSwitched() skips its rebuild while a menu is open,
+			// so catch up here in case a real focus change happened
+			// (or was triggered by the menu's own modal grab) meanwhile.
+			GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+				this._onWindowSwitched();
+				return GLib.SOURCE_REMOVE;
+			});
 		}
 	}
 
@@ -442,12 +534,34 @@ const MenuBar = class MenuBar {
 
 	removeAll() {
 		for (let e of this._menuButtons) {
+			if (e.menu && e.menu.isOpen)
+				e.menu.close(BoxPointer.PopupAnimation.NONE);
 			e.destroy();
 		}
 		this._menuButtons = [];
 	}
 
 	_onWindowSwitched() {
+		// Opening one of our own menus does Main.pushModal(), which shifts
+		// window focus and can itself trigger notify::focus-window. If we
+		// tore down the menu bar here, we'd destroy the very menu the user
+		// just opened, mid-open, corrupting the shared modal stack. Skip
+		// the rebuild while a menu is open; the real focus change (if any)
+		// will be reflected once the menu closes.
+		if (this._isShowingMenu)
+			return;
+
+		// Closing an open menu (in removeAll) pops a modal grab, which can
+		// synchronously re-trigger notify::focus-window before this call
+		// unwinds. Re-entering here would operate on actors we're already
+		// mid-destroying, corrupting the shared modal stack. Defer the
+		// re-entrant call to the next idle instead.
+		if (this._switchingWindow) {
+			this._pendingWindowSwitch = true;
+			return;
+		}
+		this._switchingWindow = true;
+
 		this.removeAll();
 		this._restoreLabel();
 		this._hideMenu();
@@ -457,7 +571,7 @@ const MenuBar = class MenuBar {
 			let windowData = {};
 			// TODO does the window matter?
 			let win = focusApp.get_windows()[0];
-			let appId = focusApp.get_id(); // *.desktop			
+			let appId = focusApp.get_id(); // *.desktop
 
 			// Check cache
 			let cachedValue = this._cache.get(appId);
@@ -478,6 +592,15 @@ const MenuBar = class MenuBar {
 				}
 			}
 			this._proxy.WindowSwitched(windowData);
+		}
+
+		this._switchingWindow = false;
+		if (this._pendingWindowSwitch) {
+			this._pendingWindowSwitch = false;
+			GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+				this._onWindowSwitched();
+				return GLib.SOURCE_REMOVE;
+			});
 		}
 	}
 
@@ -558,6 +681,29 @@ const ifaceXml = `
 	<signal name="ActivateWindowActionSignal">
 	  <arg name="action" type="s"/>
 	</signal>
+
+	<method name="EchoRequestMenuTree">
+	  <arg name="menu" type="s" direction="in"/>
+	</method>
+	<signal name="RequestMenuTreeSignal">
+	  <arg name="menu" type="s"/>
+	</signal>
+
+	<method name="EchoSendMenuTree">
+	  <arg name="menu" type="s" direction="in"/>
+	  <arg name="tree_json" type="s" direction="in"/>
+	</method>
+	<signal name="SendMenuTreeSignal">
+	  <arg name="menu" type="s"/>
+	  <arg name="tree_json" type="s"/>
+	</signal>
+
+	<method name="EchoActivateMenuItem">
+	  <arg name="selection" type="s" direction="in"/>
+	</method>
+	<signal name="ActivateMenuItemSignal">
+	  <arg name="selection" type="s"/>
+	</signal>
   </interface>
 </node>`;
 
@@ -582,7 +728,8 @@ class MyProxy {
 		this.listeners = {
 			'MenuActivated': [],
 			'SendTopLevelMenus': [],
-			'MenuOnOff': []
+			'MenuOnOff': [],
+			'SendMenuTree': []
 		}
 	}
 
@@ -595,6 +742,8 @@ class MyProxy {
 		id = this._proxy.connectSignal('ActivateWindowActionSignal', this._onActivateWindowActionSignal.bind(this));
 		this._handlerIds.push(id);
 		id = this._proxy.connectSignal('MenuOnOff', this._onMenuOnOff.bind(this));
+		this._handlerIds.push(id);
+		id = this._proxy.connectSignal('SendMenuTreeSignal', this._onSendMenuTree.bind(this));
 		this._handlerIds.push(id);
 	}
 
@@ -625,6 +774,14 @@ class MyProxy {
 		}
 	}
 
+	async _onSendMenuTree(proxy, nameOwner, args) {
+		let menu = args[0];
+		let treeJson = args[1];
+		for (let callback of this.listeners['SendMenuTree']) {
+			callback(menu, treeJson);
+		}
+	}
+
 	_onNameOwnerChanged(proxy, sender, [name, oldOwner, newOwner]) {
 		global.log(`${name} ${oldOwner} ${newOwner}`)
 	}
@@ -635,6 +792,14 @@ class MyProxy {
 
 	async EchoSignal(menu, x) {
 		this._proxy.EchoSignalRemote(menu, x);
+	}
+
+	async RequestMenuTree(menu) {
+		this._proxy.EchoRequestMenuTreeRemote(menu);
+	}
+
+	async ActivateMenuItem(selection) {
+		this._proxy.EchoActivateMenuItemRemote(selection);
 	}
 
 	destroy() {
