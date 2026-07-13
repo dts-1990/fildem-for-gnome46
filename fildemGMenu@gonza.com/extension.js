@@ -15,6 +15,7 @@ import { Extension as GExtension } from "resource:///org/gnome/shell/extensions/
 const WinTracker = Shell.WindowTracker.get_default();
 
 import { FildemGlobalMenuSettings as Settings } from './settings.js';
+import { AppMenu } from 'resource:///org/gnome/shell/ui/appMenu.js';
 import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
@@ -214,8 +215,6 @@ class MenuButton extends PanelMenu.Button {
 		super._init(0.0, label);
 		this._label = label;
 		this._menuBar = menuBar;
-		this._debugId = `${label}-${Date.now()}`;
-		log(`[FILDEM_DEBUG] CREATE ${this._debugId}`);
 
 		this.box = new St.BoxLayout({style_class: 'panel-status-menu-box menubar-button'});
 		this.labelWidget = new St.Label({
@@ -229,17 +228,6 @@ class MenuButton extends PanelMenu.Button {
 		this.menu.connect('open-state-changed', this._onOpenStateChanged.bind(this));
 	}
 
-	vfunc_event(event) {
-		if (event.type() === Clutter.EventType.BUTTON_PRESS || event.type() === Clutter.EventType.TOUCH_BEGIN)
-			log(`[FILDEM_DEBUG] PRESS ${this._debugId}`);
-		return super.vfunc_event(event);
-	}
-
-	destroy(...args) {
-		log(`[FILDEM_DEBUG] DESTROY ${this._debugId}`);
-		super.destroy(...args);
-	}
-
 	_onStyleChanged(actor) {
 		super._onStyleChanged(actor);
 		let padding = this._menuBar.extension.settings.get_int('min-padding');
@@ -248,8 +236,6 @@ class MenuButton extends PanelMenu.Button {
 	}
 
 	_onOpenStateChanged(menu, isOpen) {
-		log(`[FILDEM_DEBUG] OPEN_STATE ${this._debugId} isOpen=${isOpen}`);
-
 		if (isOpen && this.menu.isEmpty())
 			this._menuBar.requestMenuTree(this._label);
 
@@ -328,6 +314,123 @@ const Cache = class Cache {
 }
 
 /**
+ * Shows the focused app's icon + name + window title, to the left of the
+ * menu buttons — replaces needing a separate "window title" extension,
+ * and (unlike a standalone extension listening to notify::focus-window on
+ * its own) stays in sync with MenuBar's own focus/menu-open bookkeeping,
+ * so it doesn't flicker when one of our own menus grabs a modal.
+ */
+var WindowTitleIndicator = GObject.registerClass(
+class WindowTitleIndicator extends PanelMenu.Button {
+	_init(menuBar) {
+		super._init(0.5, 'Window Title');
+		this._menuBar = menuBar;
+
+		// Clicking opens the app's own menu (Quit, New Window, etc.),
+		// same as a normal app-menu indicator.
+		this._appMenu = new AppMenu(this);
+		this.setMenu(this._appMenu);
+		Main.panel.menuManager.addMenu(this._appMenu);
+		// Opening this pushes a modal too, so it must feed into the same
+		// "a menu is open" bookkeeping as the File/Edit/... buttons, or
+		// _onWindowSwitched will tear the panel down out from under it.
+		this._appMenu.connect('open-state-changed', () => this._menuBar.onMenuOpenStateChanged());
+
+		this.box = new St.BoxLayout({style_class: 'panel-button', y_align: Clutter.ActorAlign.CENTER});
+		this._icon = new St.Icon({y_align: Clutter.ActorAlign.CENTER});
+		this._iconPadding = new St.Label({y_align: Clutter.ActorAlign.CENTER});
+		this._label = new St.Label({
+			y_align: Clutter.ActorAlign.CENTER,
+			style_class: 'fildem-window-title-label'
+		});
+		this.box.add_child(this._icon);
+		this.box.add_child(this._iconPadding);
+		this.box.add_child(this._label);
+		this.add_child(this.box);
+
+		this._titleNotifyId = 0;
+		this._trackedWindow = null;
+		this._trackedApp = null;
+
+		this._showIcon = true;
+		this._showAppName = true;
+		this._showWindowTitle = true;
+
+		this.applySettings();
+		this.clear();
+	}
+
+	isOpen() {
+		return this._appMenu.isOpen;
+	}
+
+	applySettings() {
+		let settings = this._menuBar.extension.settings;
+		this._showIcon = settings.get_boolean('title-show-icon');
+		this._showAppName = settings.get_boolean('title-show-app-name');
+		this._showWindowTitle = settings.get_boolean('title-show-window-title');
+		this._icon.icon_size = settings.get_int('title-icon-size');
+
+		this._syncIconVisibility();
+		this._updateLabel(this._trackedApp, this._trackedWindow);
+	}
+
+	setWindow(app, win) {
+		this._trackTitle(win);
+		this._trackedApp = app || null;
+		if (app)
+			this._appMenu.setApp(app);
+
+		if (app)
+			this._icon.set_gicon(app.get_icon());
+		this._syncIconVisibility();
+
+		this._updateLabel(app, win);
+		this.show();
+	}
+
+	clear() {
+		this._trackTitle(null);
+		this._trackedApp = null;
+		this._syncIconVisibility();
+		this._label.set_text('');
+		this.hide();
+	}
+
+	_syncIconVisibility() {
+		let show = this._showIcon && !!this._trackedApp;
+		this._icon.visible = show;
+		this._iconPadding.set_text(show ? '   ' : '');
+	}
+
+	_trackTitle(win) {
+		if (this._trackedWindow && this._titleNotifyId) {
+			this._trackedWindow.disconnect(this._titleNotifyId);
+			this._titleNotifyId = 0;
+		}
+		this._trackedWindow = win || null;
+		if (this._trackedWindow) {
+			this._titleNotifyId = this._trackedWindow.connect('notify::title', () => {
+				this._updateLabel(this._trackedApp, this._trackedWindow);
+			});
+		}
+	}
+
+	_updateLabel(app, win) {
+		let appName = (this._showAppName && app) ? app.get_name() : '';
+		let title = (this._showWindowTitle && win) ? win.get_title() : '';
+		let text = (appName && title && title !== appName) ? `${appName} — ${title}` : (appName || title);
+		this._label.set_text(text || '');
+	}
+
+	destroy() {
+		this._trackTitle(null);
+		Main.panel.menuManager.removeMenu(this._appMenu);
+		super.destroy();
+	}
+});
+
+/**
  * This is a manager not a container
  */
 const MenuBar = class MenuBar {
@@ -341,6 +444,11 @@ const MenuBar = class MenuBar {
 		this._isShowingMenu = false;
 
 		this._cache = new Cache();
+
+		this._titleIndicator = new WindowTitleIndicator(this);
+		// Position > 0 so extensions pinned to position 0 (e.g. Space Bar)
+		// stay leftmost regardless of extension load order on Shell restart.
+		Main.panel.addToStatusArea('fildem-window-title', this._titleIndicator, 1, 'left');
 
 		this._notifyFocusWinId = global.display.connect('notify::focus-window', this._onWindowSwitched.bind(this));
 		this._proxy.listeners['SendTopLevelMenus'].push(this._cache.withCache(this.setMenus.bind(this)));
@@ -439,7 +547,8 @@ const MenuBar = class MenuBar {
 	}
 
 	onMenuOpenStateChanged() {
-		this._isShowingMenu = this._menuButtons.some(b => b.menu.isOpen);
+		this._isShowingMenu = this._menuButtons.some(b => b.menu.isOpen) ||
+			(this._titleIndicator && this._titleIndicator.isOpen());
 		if (!this._isShowingMenu) {
 			this._onPanelLeave();
 			// _onWindowSwitched() skips its rebuild while a menu is open,
@@ -573,6 +682,8 @@ const MenuBar = class MenuBar {
 			let win = focusApp.get_windows()[0];
 			let appId = focusApp.get_id(); // *.desktop
 
+			this._titleIndicator.setWindow(focusApp, win);
+
 			// Check cache
 			let cachedValue = this._cache.get(appId);
 			if (cachedValue) {
@@ -592,6 +703,8 @@ const MenuBar = class MenuBar {
 				}
 			}
 			this._proxy.WindowSwitched(windowData);
+		} else {
+			this._titleIndicator.clear();
 		}
 
 		this._switchingWindow = false;
@@ -628,6 +741,7 @@ const MenuBar = class MenuBar {
 		this._disconnectAll();
 		this.removeAll();
 		this._restoreLabel();
+		this._titleIndicator.destroy();
 	}
 };
 
@@ -830,6 +944,12 @@ class Extension {
 			'changed::hide-app-menu',
 			() => { this.menubar.setHideAppMenuButton(); }
 		));
+		for (let key of ['title-show-icon', 'title-show-app-name', 'title-show-window-title', 'title-icon-size']) {
+			this._handlerIds.push(this.settings.connect(
+				`changed::${key}`,
+				() => { this.menubar._titleIndicator.applySettings(); }
+			));
+		}
 	}
 
 	destroy() {

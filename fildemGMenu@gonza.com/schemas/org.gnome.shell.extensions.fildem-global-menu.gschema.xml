@@ -13,5 +13,22 @@
 			<default>true</default>
 			<summary>Hide the app label when showing the menu</summary>
 		</key>
+		<key type="b" name="title-show-icon">
+			<default>true</default>
+			<summary>Show the focused app's icon in the panel</summary>
+		</key>
+		<key type="b" name="title-show-app-name">
+			<default>true</default>
+			<summary>Show the focused app's name in the panel</summary>
+		</key>
+		<key type="b" name="title-show-window-title">
+			<default>true</default>
+			<summary>Show the focused window's title in the panel</summary>
+		</key>
+		<key type="i" name="title-icon-size">
+			<range min="8" max="48"/>
+			<default>16</default>
+			<summary>Size of the app icon shown in the panel</summary>
+		</key>
 	</schema>
 </schemalist>

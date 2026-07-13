@@ -35,7 +35,8 @@ class PrefsWidget extends Gtk.Box {
 
 	_getIntSpins() {
 		return [
-			'min-padding'
+			'min-padding',
+			'title-icon-size'
 		];
 	}
 
@@ -58,7 +59,10 @@ class PrefsWidget extends Gtk.Box {
 	_getBooleans() {
 		return [
 			'show-only-when-hover',
-			'hide-app-menu'
+			'hide-app-menu',
+			'title-show-icon',
+			'title-show-app-name',
+			'title-show-window-title'
 		];
 	}
 

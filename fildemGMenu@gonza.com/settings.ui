@@ -15,6 +15,20 @@
 		<property name="spacing">15</property>
 
 
+		<!-- Section: Menu bar -->
+
+		<child>
+			<object class="GtkLabel">
+				<property name="visible">True</property>
+				<property name="can_focus">False</property>
+				<property name="xalign">0</property>
+				<property name="margin-top">4</property>
+				<property name="label">&lt;b&gt;Menu Bar&lt;/b&gt;</property>
+				<property name="use-markup">True</property>
+			</object>
+		</child>
+
+
 		<!-- min-padding -->
 
 		<child>
@@ -100,6 +114,139 @@
 						<property name="visible">True</property>
 						<property name="can_focus">True</property>
 						<property name="valign">center</property>
+					</object>
+				</child>
+			</object>
+		</child>
+
+
+		<!-- Section: Window title indicator -->
+
+		<child>
+			<object class="GtkLabel">
+				<property name="visible">True</property>
+				<property name="can_focus">False</property>
+				<property name="xalign">0</property>
+				<property name="margin-top">12</property>
+				<property name="label">&lt;b&gt;Window Title Indicator&lt;/b&gt;</property>
+				<property name="use-markup">True</property>
+			</object>
+		</child>
+
+
+		<!-- title-show-icon -->
+
+		<child>
+			<object class="GtkBox">
+				<property name="visible">True</property>
+				<property name="can_focus">False</property>
+				<property name="spacing">50</property>
+				<child>
+					<object class="GtkLabel">
+						<property name="visible">True</property>
+						<property name="can_focus">False</property>
+						<property name="valign">center</property>
+						<property name="hexpand">1</property>
+						<property name="xalign">0</property>
+						<property name="label">Show the focused app's icon in the panel</property>
+					</object>
+				</child>
+				<child>
+					<object class="GtkSwitch" id="title_show_icon">
+						<property name="visible">True</property>
+						<property name="can_focus">True</property>
+						<property name="valign">center</property>
+					</object>
+				</child>
+			</object>
+		</child>
+
+
+		<!-- title-show-app-name -->
+
+		<child>
+			<object class="GtkBox">
+				<property name="visible">True</property>
+				<property name="can_focus">False</property>
+				<property name="spacing">50</property>
+				<child>
+					<object class="GtkLabel">
+						<property name="visible">True</property>
+						<property name="can_focus">False</property>
+						<property name="valign">center</property>
+						<property name="hexpand">1</property>
+						<property name="xalign">0</property>
+						<property name="label">Show the focused app's name in the panel</property>
+					</object>
+				</child>
+				<child>
+					<object class="GtkSwitch" id="title_show_app_name">
+						<property name="visible">True</property>
+						<property name="can_focus">True</property>
+						<property name="valign">center</property>
+					</object>
+				</child>
+			</object>
+		</child>
+
+
+		<!-- title-show-window-title -->
+
+		<child>
+			<object class="GtkBox">
+				<property name="visible">True</property>
+				<property name="can_focus">False</property>
+				<property name="spacing">50</property>
+				<child>
+					<object class="GtkLabel">
+						<property name="visible">True</property>
+						<property name="can_focus">False</property>
+						<property name="valign">center</property>
+						<property name="hexpand">1</property>
+						<property name="xalign">0</property>
+						<property name="label">Show the focused window's title in the panel</property>
+					</object>
+				</child>
+				<child>
+					<object class="GtkSwitch" id="title_show_window_title">
+						<property name="visible">True</property>
+						<property name="can_focus">True</property>
+						<property name="valign">center</property>
+					</object>
+				</child>
+			</object>
+		</child>
+
+
+		<!-- title-icon-size -->
+
+		<child>
+			<object class="GtkBox">
+				<property name="visible">True</property>
+				<property name="can_focus">False</property>
+				<property name="spacing">50</property>
+				<child>
+					<object class="GtkLabel">
+						<property name="visible">True</property>
+						<property name="can_focus">False</property>
+						<property name="valign">center</property>
+						<property name="hexpand">1</property>
+						<property name="xalign">0</property>
+						<property name="label">Size of the app icon shown in the panel</property>
+					</object>
+				</child>
+				<child>
+					<object class="GtkAdjustment" id="adjustment_title_icon_size">
+						<property name="lower">8</property>
+						<property name="upper">48</property>
+						<property name="value">16</property>
+						<property name="step-increment">1</property>
+					</object>
+					<object class="GtkSpinButton" id="title_icon_size">
+						<property name="visible">True</property>
+						<property name="can_focus">True</property>
+						<property name="valign">center</property>
+						<property name="adjustment">adjustment_title_icon_size</property>
 					</object>
 				</child>
 			</object>
