@@ -236,6 +236,12 @@ class MenuButton extends PanelMenu.Button {
 	}
 
 	_onOpenStateChanged(menu, isOpen) {
+		// PanelMenu.Button's own _onOpenStateChanged (connected by setMenu())
+		// is what keeps this button visually highlighted ('active' pseudo
+		// class) while its menu is open; overriding the method without
+		// calling super silently dropped that behavior.
+		super._onOpenStateChanged(menu, isOpen);
+
 		if (isOpen && this.menu.isEmpty())
 			this._menuBar.requestMenuTree(this._label);
 
@@ -327,14 +333,30 @@ class WindowTitleIndicator extends PanelMenu.Button {
 		this._menuBar = menuBar;
 
 		// Clicking opens the app's own menu (Quit, New Window, etc.),
-		// same as a normal app-menu indicator.
+		// same as a normal app-menu indicator. addToStatusArea() (called by
+		// MenuBar right after construction) registers this.menu with
+		// Main.panel.menuManager automatically — an extra manual addMenu()
+		// call here double-registers it and made the first click a no-op.
 		this._appMenu = new AppMenu(this);
 		this.setMenu(this._appMenu);
-		Main.panel.menuManager.addMenu(this._appMenu);
 		// Opening this pushes a modal too, so it must feed into the same
 		// "a menu is open" bookkeeping as the File/Edit/... buttons, or
 		// _onWindowSwitched will tear the panel down out from under it.
 		this._appMenu.connect('open-state-changed', () => this._menuBar.onMenuOpenStateChanged());
+
+		// Applied to `this` (the full clickable/highlightable button area),
+		// not the inner box, so the gradient covers exactly the same region
+		// as the hover/active highlight — otherwise the highlight border
+		// (drawn on the outer actor) extends past the inner box's padding.
+		// St's CSS engine only supports simple 2-stop gradients (no
+		// percentage stops via linear-gradient()), so start/end are kept
+		// close together to read as mostly-solid rather than a hard fade.
+		this.set_style(
+			'background-gradient-start: rgba(53,132,228,0.45); ' +
+			'background-gradient-end: rgba(53,132,228,0.30); ' +
+			'background-gradient-direction: horizontal; ' +
+			'border-radius: 6px;'
+		);
 
 		this.box = new St.BoxLayout({style_class: 'panel-button', y_align: Clutter.ActorAlign.CENTER});
 		this._icon = new St.Icon({y_align: Clutter.ActorAlign.CENTER});
@@ -534,6 +556,13 @@ const MenuBar = class MenuBar {
 	_onSendMenuTree(label, treeJson) {
 		let button = this._menuButtons.find(b => b._label === label);
 		if (!button)
+			return;
+
+		// Rebuilding items while the menu is open destroys and recreates
+		// the actor under the user's cursor mid-click, which can eat the
+		// click's press/active visual feedback even though the click still
+		// registers. The prefetched content is already showing; skip.
+		if (button.menu.isOpen)
 			return;
 
 		let items = [];
