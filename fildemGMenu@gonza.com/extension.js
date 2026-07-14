@@ -226,6 +226,19 @@ class MenuButton extends PanelMenu.Button {
 		this.add_child(this.box);
 
 		this.menu.connect('open-state-changed', this._onOpenStateChanged.bind(this));
+
+		// BoxPointer.vfunc_allocate() re-evaluates whether to flip the arrow
+		// from TOP to BOTTOM (_updateFlip -> _calculateArrowSide) whenever
+		// content grows close to the CSS max-height clamp that
+		// PanelMenu.Button._onOpenStateChanged sets on every open. Confirmed
+		// via direct instrumentation of _reposition(): near that boundary,
+		// GNOME's flip check incorrectly decides to flip, and the BOTTOM-side
+		// position formula (anchored above the source, subtracting the full
+		// box height) then places the entire popup off the top of the screen.
+		// Our menu buttons only ever live in the top panel, so there's never
+		// a legitimate reason to flip to the BOTTOM side — disable it.
+		let bp = this.menu._boxPointer;
+		bp._updateFlip = () => {};
 	}
 
 	_onStyleChanged(actor) {
@@ -268,6 +281,39 @@ class MenuButton extends PanelMenu.Button {
 			for (let child of item.children)
 				this._addMenuItem(subMenuItem.menu, child);
 			parentMenu.addMenuItem(subMenuItem);
+
+			// PopupSubMenuMenuItem doesn't open as a separate flyout: its
+			// items get appended inline into the SAME top-level popup box
+			// (accordion-style). A submenu with many entries (e.g. Eclipse's
+			// File > New, or a long Recent Files list) can inflate that box
+			// past the screen height. GNOME's own PopupSubMenu._needsScrollbar()
+			// is supposed to catch this by comparing the top menu's natural
+			// height against a max-height set on it (PanelMenu.Button sets one
+			// on every open) — but once the content reaches that clamp,
+			// BoxPointer's repositioning breaks and places the whole popup
+			// off-screen above the panel instead of clamping it below. Confirmed
+			// via direct instrumentation: max-height was correctly applied
+			// (1008px) yet the box still ended up positioned entirely above
+			// the monitor (y=-1008). Capping each submenu's own height here
+			// (regardless of what the top box decides) keeps the top box well
+			// under that clamp so it never has to renegotiate its position,
+			// and makes the submenu itself scrollable for the overflow.
+			const SUBMENU_MAX_HEIGHT = 350;
+			subMenuItem.menu.actor.style = `max-height: ${SUBMENU_MAX_HEIGHT}px;`;
+			subMenuItem.menu.connect('open-state-changed', (m, isOpen) => {
+				if (!isOpen)
+					return;
+				// PopupSubMenu.open() emits 'open-state-changed' BEFORE it
+				// sets vscrollbar_policy itself (based on its own, top-menu
+				// -relative _needsScrollbar() check), so setting the policy
+				// here directly gets clobbered synchronously right after this
+				// handler returns. Defer to the next idle so we run after
+				// open() has finished overwriting it.
+				GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+					subMenuItem.menu.actor.vscrollbar_policy = St.PolicyType.AUTOMATIC;
+					return GLib.SOURCE_REMOVE;
+				});
+			});
 			return;
 		}
 
