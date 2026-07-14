@@ -344,19 +344,24 @@ class WindowTitleIndicator extends PanelMenu.Button {
 		// _onWindowSwitched will tear the panel down out from under it.
 		this._appMenu.connect('open-state-changed', () => this._menuBar.onMenuOpenStateChanged());
 
-		// Applied to `this` (the full clickable/highlightable button area),
-		// not the inner box, so the gradient covers exactly the same region
-		// as the hover/active highlight — otherwise the highlight border
-		// (drawn on the outer actor) extends past the inner box's padding.
-		// St's CSS engine only supports simple 2-stop gradients (no
-		// percentage stops via linear-gradient()), so start/end are kept
-		// close together to read as mostly-solid rather than a hard fade.
-		this.set_style(
-			'background-gradient-start: rgba(53,132,228,0.45); ' +
-			'background-gradient-end: rgba(53,132,228,0.30); ' +
-			'background-gradient-direction: horizontal; ' +
-			'border-radius: 6px;'
-		);
+		// A real child actor (whether a plain background widget or an
+		// St.DrawingArea) is bound by `this`'s own preferred-size/allocation
+		// math: PanelMenu.Button reserves extra hover/highlight padding
+		// around its child that the child itself never actually gets
+		// allocated, so any descendant-painted background always came out
+		// smaller than the hover-highlight box (e.g. 129px child vs 154px
+		// button). A Clutter.Image content layer would sidestep that (content
+		// doesn't participate in layout at all) — tried rendering the
+		// gradient with Cairo into an ImageSurface for that, but this
+		// build's gjs cairo binding doesn't expose ImageSurface.getData()
+		// at all, so there's no way to get the pixels back out. Falling
+		// back to a plain CSS background on `this` directly instead: only
+		// a 2-stop gradient (St's CSS engine doesn't support more), but
+		// since it's `this`'s own background rather than a descendant's,
+		// it's painted across `this`'s exact box with no sizing mismatch.
+		this._interfaceSettings = new Gio.Settings({schema_id: 'org.gnome.desktop.interface'});
+		this._accentChangedId = this._interfaceSettings.connect('changed::accent-color', () => this._updateGradientStyle());
+		this._updateGradientStyle();
 
 		this.box = new St.BoxLayout({style_class: 'panel-button', y_align: Clutter.ActorAlign.CENTER});
 		this._icon = new St.Icon({y_align: Clutter.ActorAlign.CENTER});
@@ -384,6 +389,97 @@ class WindowTitleIndicator extends PanelMenu.Button {
 
 	isOpen() {
 		return this._appMenu.isOpen;
+	}
+
+	// GNOME's accent-color setting (Settings > Appearance) is what the
+	// user actually thinks of as "their" TopBar color — the panel's own
+	// background is usually a near-grayscale dark/light tone with no hue
+	// to rotate, which is why an earlier attempt at deriving the gradient
+	// from it came out flat gray. Re-reads live, so it adapts if the user
+	// changes their accent color later (see the 'changed::accent-color'
+	// listener in _init).
+	static ACCENT_COLORS = {
+		blue: [53, 132, 228], teal: [33, 144, 164], green: [58, 148, 74],
+		yellow: [200, 136, 0], orange: [237, 91, 0], red: [230, 45, 66],
+		pink: [213, 97, 153], purple: [145, 65, 172], slate: [111, 131, 150],
+	};
+
+	_getAccentColor() {
+		try {
+			let name = this._interfaceSettings.get_string('accent-color');
+			if (WindowTitleIndicator.ACCENT_COLORS[name])
+				return WindowTitleIndicator.ACCENT_COLORS[name];
+		} catch (e) {
+			// 'accent-color' key not present on older GNOME versions.
+		}
+		return WindowTitleIndicator.ACCENT_COLORS.blue;
+	}
+
+	// Sets `this`'s own CSS background — applied directly to `this` (not a
+	// descendant), it's painted across `this`'s exact box, so it can't
+	// mismatch the hover/active highlight the way a child actor's
+	// background did.
+	_updateGradientStyle() {
+		let [ar, ag, ab] = this._getAccentColor();
+		// Rotate the accent color's hue for the second stop so the
+		// gradient reads as two-tone rather than a single-hue fade, while
+		// staying clearly derived from (and adapting with) the user's
+		// accent color.
+		let [br, bg, bb] = this._rotateHue(ar, ag, ab, 80);
+		const alpha = 0.55;
+		this.set_style(
+			`background-gradient-start: rgba(${ar},${ag},${ab},${alpha}); ` +
+			`background-gradient-end: rgba(${br},${bg},${bb},${alpha}); ` +
+			'background-gradient-direction: horizontal; ' +
+			'border-radius: 6px;'
+		);
+	}
+
+	// Rotates an RGB color's hue by `degrees` on the HSL wheel, keeping
+	// its saturation/lightness — used to derive a second gradient stop
+	// that's clearly a different color but stays related to the source.
+	_rotateHue(r, g, b, degrees) {
+		r /= 255; g /= 255; b /= 255;
+		let max = Math.max(r, g, b), min = Math.min(r, g, b);
+		let l = (max + min) / 2;
+		let h, s;
+		if (max === min) {
+			h = s = 0;
+		} else {
+			let d = max - min;
+			s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+			switch (max) {
+				case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+				case g: h = (b - r) / d + 2; break;
+				default: h = (r - g) / d + 4; break;
+			}
+			h /= 6;
+		}
+
+		h = (h + degrees / 360) % 1;
+		if (h < 0)
+			h += 1;
+
+		const hue2rgb = (p, q, t) => {
+			if (t < 0) t += 1;
+			if (t > 1) t -= 1;
+			if (t < 1 / 6) return p + (q - p) * 6 * t;
+			if (t < 1 / 2) return q;
+			if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+			return p;
+		};
+
+		let r2, g2, b2;
+		if (s === 0) {
+			r2 = g2 = b2 = l;
+		} else {
+			let q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+			let p = 2 * l - q;
+			r2 = hue2rgb(p, q, h + 1 / 3);
+			g2 = hue2rgb(p, q, h);
+			b2 = hue2rgb(p, q, h - 1 / 3);
+		}
+		return [Math.round(r2 * 255), Math.round(g2 * 255), Math.round(b2 * 255)];
 	}
 
 	applySettings() {
@@ -447,6 +543,10 @@ class WindowTitleIndicator extends PanelMenu.Button {
 
 	destroy() {
 		this._trackTitle(null);
+		if (this._accentChangedId) {
+			this._interfaceSettings.disconnect(this._accentChangedId);
+			this._accentChangedId = 0;
+		}
 		Main.panel.menuManager.removeMenu(this._appMenu);
 		super.destroy();
 	}
