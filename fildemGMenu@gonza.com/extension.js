@@ -300,6 +300,12 @@ class MenuButton extends PanelMenu.Button {
 			// and makes the submenu itself scrollable for the overflow.
 			const SUBMENU_MAX_HEIGHT = 350;
 			subMenuItem.menu.actor.style = `max-height: ${SUBMENU_MAX_HEIGHT}px;`;
+			// The whole menu tree can get torn down (MenuBar.removeAll(),
+			// e.g. from a focus change while this submenu is transitioning
+			// open) before the idle below runs; guard against touching the
+			// then-disposed actor.
+			let destroyed = false;
+			subMenuItem.connect('destroy', () => { destroyed = true; });
 			subMenuItem.menu.connect('open-state-changed', (m, isOpen) => {
 				if (!isOpen)
 					return;
@@ -310,7 +316,8 @@ class MenuButton extends PanelMenu.Button {
 				// handler returns. Defer to the next idle so we run after
 				// open() has finished overwriting it.
 				GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-					subMenuItem.menu.actor.vscrollbar_policy = St.PolicyType.AUTOMATIC;
+					if (!destroyed)
+						subMenuItem.menu.actor.vscrollbar_policy = St.PolicyType.AUTOMATIC;
 					return GLib.SOURCE_REMOVE;
 				});
 			});
@@ -612,6 +619,7 @@ const MenuBar = class MenuBar {
 		this._isShowingMenu = false;
 
 		this._cache = new Cache();
+		this._lastFocusAppId = null;
 
 		this._titleIndicator = new WindowTitleIndicator(this);
 		// Position > 0 so extensions pinned to position 0 (e.g. Space Bar)
@@ -631,8 +639,13 @@ const MenuBar = class MenuBar {
 		this.setForceShowMenu();
 		this.setHideAppMenuButton();
 
-		Main.overview.connect('showing', this._onOverviewOpened.bind(this));
-		Main.overview.connect('hiding', this._onOverviewClosed.bind(this));
+		// Main.overview is a long-lived singleton that outlives any single
+		// enable()/disable() cycle of this extension — these connections must
+		// be explicitly torn down in destroy(), or every re-enable leaks
+		// another listener that keeps firing into an already-destroyed
+		// MenuBar (itself a source of "already disposed" warnings).
+		this._overviewShowingId = Main.overview.connect('showing', this._onOverviewOpened.bind(this));
+		this._overviewHidingId = Main.overview.connect('hiding', this._onOverviewClosed.bind(this));
 	}
 
 	setForceShowMenu() {
@@ -653,7 +666,7 @@ const MenuBar = class MenuBar {
 		this._showAppMenuButton = !this.extension.settings.get_boolean('hide-app-menu');
 
 		let appBtn = Main.panel._leftBox.get_children().filter(item => {
-			item.get_first_child().constructor.name == 'AppMenuButton'
+			return item.get_first_child().constructor.name == 'AppMenuButton';
 		});
 		if (appBtn.length > 0) {
 			this._appMenuButton = appBtn[0];
@@ -846,23 +859,43 @@ const MenuBar = class MenuBar {
 		}
 		this._switchingWindow = true;
 
-		this.removeAll();
 		this._restoreLabel();
-		this._hideMenu();
 		const overview = Main.overview.visibleTarget;
 		const focusApp = WinTracker.focus_app || Main.panel.statusArea.appMenu?._targetApp;
+		const appId = focusApp ? focusApp.get_id() : null; // *.desktop
+		// This fires on every menu close (see onMenuOpenStateChanged), not
+		// just on an actual app switch, since it also needs to catch up on
+		// any real focus change that happened while a menu held the modal
+		// grab. Destroying and recreating every MenuButton when the focused
+		// app hasn't actually changed (the common case: just closing one of
+		// our own menus, or switching between two windows of the same app)
+		// was pure waste — and left Main.panel's own per-indicator listener
+		// (attached when the old indicator was first added, tied to
+		// Main.panel's lifetime rather than the indicator's) still holding a
+		// reference to the just-destroyed container, so the next menu close
+		// event on some unrelated leftover object would log an "already
+		// disposed" warning trying to read it. Only rebuild when the app id
+		// actually changed.
+		const appChanged = appId !== this._lastFocusAppId;
+
+		if (appChanged) {
+			this.removeAll();
+			this._hideMenu();
+		}
+
 		if (focusApp) {
 			let windowData = {};
 			// TODO does the window matter?
 			let win = focusApp.get_windows()[0];
-			let appId = focusApp.get_id(); // *.desktop
 
 			this._titleIndicator.setWindow(focusApp, win);
 
-			// Check cache
-			let cachedValue = this._cache.get(appId);
-			if (cachedValue) {
-				this.setMenus(cachedValue);
+			if (appChanged) {
+				// Check cache
+				let cachedValue = this._cache.get(appId);
+				if (cachedValue) {
+					this.setMenus(cachedValue);
+				}
 			}
 
 			// global.log(`app id: ${focusApp.get_id()} win id: ${win.get_id()}`);
@@ -882,6 +915,7 @@ const MenuBar = class MenuBar {
 			this._titleIndicator.clear();
 		}
 
+		this._lastFocusAppId = appId;
 		this._switchingWindow = false;
 		if (this._pendingWindowSwitch) {
 			this._pendingWindowSwitch = false;
@@ -910,6 +944,8 @@ const MenuBar = class MenuBar {
 			Main.panel.disconnect(h);
 		}
 		global.display.disconnect(this._notifyFocusWinId);
+		Main.overview.disconnect(this._overviewShowingId);
+		Main.overview.disconnect(this._overviewHidingId);
 	}
 
 	destroy() {
