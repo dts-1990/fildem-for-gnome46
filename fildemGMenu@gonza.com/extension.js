@@ -227,6 +227,16 @@ class MenuButton extends PanelMenu.Button {
 
 		this.menu.connect('open-state-changed', this._onOpenStateChanged.bind(this));
 
+		// A focus change can removeAll()/rebuild the whole menu bar out from
+		// under an idle_add callback that was already scheduled (e.g. the
+		// _updateTopScrollbar() deferrals below) — without this, that
+		// callback runs a full get_preferred_height() walk (which itself
+		// recurses into get_theme_node() on every descendant) against a
+		// tree that's since been unparented from the stage, spamming
+		// "which is not in the stage" warnings for each removed widget.
+		this._destroyed = false;
+		this.connect('destroy', () => { this._destroyed = true; });
+
 		// BoxPointer.vfunc_allocate() re-evaluates whether to flip the arrow
 		// from TOP to BOTTOM (_updateFlip -> _calculateArrowSide) whenever
 		// content grows close to the CSS max-height clamp that
@@ -275,6 +285,8 @@ class MenuButton extends PanelMenu.Button {
 	// expands/collapses within it, since that changes the box's natural
 	// height without the top menu itself re-opening.
 	_updateTopScrollbar() {
+		if (this._destroyed)
+			return;
 		let topMenu = this.menu;
 		let [, naturalHeight] = topMenu.box.get_preferred_height(-1);
 		let maxHeight = topMenu.actor.get_theme_node().get_max_height();
@@ -351,22 +363,7 @@ class MenuButton extends PanelMenu.Button {
 			// under that clamp so it never has to renegotiate its position,
 			// and makes the submenu itself scrollable for the overflow.
 			const SUBMENU_MAX_HEIGHT = 350;
-			// Only capping the max leaves this actor free to shrink toward
-			// a near-zero minimum. That's harmless for a lone top-level
-			// menu, but once the top menu is *also* wrapped in a scrollview
-			// (for menus like Wireshark's Statistics, long enough on their
-			// own to need one), St's box layout treats this submenu — the
-			// one child among dozens with a low reported minimum — as the
-			// single most "flexible" child, and dumps the entire overflow
-			// deficit onto it alone, crushing it to a couple of pixels
-			// instead of leaving it at its real (capped) height and letting
-			// the outer scrollview handle the rest. Pinning min-height to
-			// the same, actual (content-vs-cap) height it would use anyway
-			// takes it out of the running for that compression.
-			let [, naturalContentHeight] = subMenuItem.menu.box.get_preferred_height(-1);
-			let pinnedHeight = Math.min(naturalContentHeight, SUBMENU_MAX_HEIGHT);
-			subMenuItem.menu.actor.style =
-				`max-height: ${SUBMENU_MAX_HEIGHT}px; min-height: ${pinnedHeight}px;`;
+			subMenuItem.menu.actor.style = `max-height: ${SUBMENU_MAX_HEIGHT}px;`;
 			// The whole menu tree can get torn down (MenuBar.removeAll(),
 			// e.g. from a focus change while this submenu is transitioning
 			// open) before the idle below runs; guard against touching the
@@ -386,8 +383,31 @@ class MenuButton extends PanelMenu.Button {
 				GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
 					if (destroyed)
 						return GLib.SOURCE_REMOVE;
-					if (isOpen)
+					if (isOpen) {
 						subMenuItem.menu.actor.vscrollbar_policy = St.PolicyType.AUTOMATIC;
+						// Only capping the max leaves this actor free to shrink
+						// toward a near-zero minimum. That's harmless for a lone
+						// top-level menu, but once the top menu is *also*
+						// wrapped in a scrollview (for menus like Wireshark's
+						// Statistics, long enough on their own to need one),
+						// St's box layout treats this submenu — the one child
+						// among dozens with a low reported minimum — as the
+						// single most "flexible" child, and dumps the entire
+						// overflow deficit onto it alone, crushing it to a
+						// couple of pixels instead of leaving it at its real
+						// (capped) height and letting the outer scrollview
+						// handle the rest. Pinning min-height to the same,
+						// actual height it's using anyway takes it out of the
+						// running for that compression. Computed here (not at
+						// construction time) because the widget isn't attached
+						// to the stage yet during the initial tree build, and
+						// get_preferred_height() on an unstaged actor spams
+						// "which is not in the stage" theme-node warnings.
+						let [, naturalContentHeight] = subMenuItem.menu.box.get_preferred_height(-1);
+						let pinnedHeight = Math.min(naturalContentHeight, SUBMENU_MAX_HEIGHT);
+						subMenuItem.menu.actor.style =
+							`max-height: ${SUBMENU_MAX_HEIGHT}px; min-height: ${pinnedHeight}px;`;
+					}
 					this._updateTopScrollbar();
 					return GLib.SOURCE_REMOVE;
 				});
