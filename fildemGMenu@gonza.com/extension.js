@@ -239,6 +239,48 @@ class MenuButton extends PanelMenu.Button {
 		// a legitimate reason to flip to the BOTTOM side — disable it.
 		let bp = this.menu._boxPointer;
 		bp._updateFlip = () => {};
+
+		// Unlike PopupSubMenu, GNOME's top-level PopupMenu never wraps its
+		// own content in a scrollable container — box goes straight into
+		// the BoxPointer's bin. That's fine as long as the top menu's own
+		// items fit under the max-height clamp PanelMenu.Button applies on
+		// every open, but a long top-level menu (e.g. Wireshark's
+		// "Statistics" menu) can already be sitting at that clamp on its
+		// own, with no room left for an inline submenu to expand into.
+		// Insert a scrollview here too, mirroring what PopupSubMenu does
+		// internally, so the top menu can scroll instead of just refusing
+		// to grow.
+		let topBin = bp.bin;
+		topBin.remove_child(this.menu.box);
+		// St.ScrollView treats "child" as a special construct-time
+		// single-child slot (same as PopupSubMenu's own `child: this.box`
+		// pattern) — adding the box afterwards via add_child() leaves the
+		// scrollview's real layout machinery unaware of it, so it (and
+		// anything inside it, like an inline-expanded submenu) gets an
+		// effectively arbitrary near-zero allocation instead of its real
+		// height. Must be passed at construction.
+		this._menuScrollView = new St.ScrollView({
+			hscrollbar_policy: St.PolicyType.NEVER,
+			vscrollbar_policy: St.PolicyType.NEVER,
+			clip_to_allocation: true,
+			child: this.menu.box,
+		});
+		topBin.set_child(this._menuScrollView);
+	}
+
+	// Only reserve the scrollbar gutter when the top menu's own content
+	// actually exceeds its max-height clamp — mirrors PopupSubMenu's own
+	// "looks bad when we don't need it" handling. Needs recomputing not
+	// just on the top menu's own open, but every time an inline submenu
+	// expands/collapses within it, since that changes the box's natural
+	// height without the top menu itself re-opening.
+	_updateTopScrollbar() {
+		let topMenu = this.menu;
+		let [, naturalHeight] = topMenu.box.get_preferred_height(-1);
+		let maxHeight = topMenu.actor.get_theme_node().get_max_height();
+		let needsScrollbar = maxHeight >= 0 && naturalHeight >= maxHeight;
+		this._menuScrollView.vscrollbar_policy =
+			needsScrollbar ? St.PolicyType.AUTOMATIC : St.PolicyType.NEVER;
 	}
 
 	_onStyleChanged(actor) {
@@ -257,6 +299,16 @@ class MenuButton extends PanelMenu.Button {
 
 		if (isOpen && this.menu.isEmpty())
 			this._menuBar.requestMenuTree(this._label);
+
+		if (isOpen) {
+			// super's own handler (called above) is what applies the
+			// max-height clamp this depends on; defer to idle so we read
+			// it after that's actually landed.
+			GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+				this._updateTopScrollbar();
+				return GLib.SOURCE_REMOVE;
+			});
+		}
 
 		this._menuBar.onMenuOpenStateChanged();
 	}
@@ -299,7 +351,22 @@ class MenuButton extends PanelMenu.Button {
 			// under that clamp so it never has to renegotiate its position,
 			// and makes the submenu itself scrollable for the overflow.
 			const SUBMENU_MAX_HEIGHT = 350;
-			subMenuItem.menu.actor.style = `max-height: ${SUBMENU_MAX_HEIGHT}px;`;
+			// Only capping the max leaves this actor free to shrink toward
+			// a near-zero minimum. That's harmless for a lone top-level
+			// menu, but once the top menu is *also* wrapped in a scrollview
+			// (for menus like Wireshark's Statistics, long enough on their
+			// own to need one), St's box layout treats this submenu — the
+			// one child among dozens with a low reported minimum — as the
+			// single most "flexible" child, and dumps the entire overflow
+			// deficit onto it alone, crushing it to a couple of pixels
+			// instead of leaving it at its real (capped) height and letting
+			// the outer scrollview handle the rest. Pinning min-height to
+			// the same, actual (content-vs-cap) height it would use anyway
+			// takes it out of the running for that compression.
+			let [, naturalContentHeight] = subMenuItem.menu.box.get_preferred_height(-1);
+			let pinnedHeight = Math.min(naturalContentHeight, SUBMENU_MAX_HEIGHT);
+			subMenuItem.menu.actor.style =
+				`max-height: ${SUBMENU_MAX_HEIGHT}px; min-height: ${pinnedHeight}px;`;
 			// The whole menu tree can get torn down (MenuBar.removeAll(),
 			// e.g. from a focus change while this submenu is transitioning
 			// open) before the idle below runs; guard against touching the
@@ -307,17 +374,21 @@ class MenuButton extends PanelMenu.Button {
 			let destroyed = false;
 			subMenuItem.connect('destroy', () => { destroyed = true; });
 			subMenuItem.menu.connect('open-state-changed', (m, isOpen) => {
-				if (!isOpen)
-					return;
 				// PopupSubMenu.open() emits 'open-state-changed' BEFORE it
 				// sets vscrollbar_policy itself (based on its own, top-menu
 				// -relative _needsScrollbar() check), so setting the policy
 				// here directly gets clobbered synchronously right after this
 				// handler returns. Defer to the next idle so we run after
-				// open() has finished overwriting it.
+				// open() has finished overwriting it. Also, expanding or
+				// collapsing this submenu changes the top-level box's own
+				// natural height (inline accordion), so re-check whether
+				// the top menu itself now needs a scrollbar too.
 				GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-					if (!destroyed)
+					if (destroyed)
+						return GLib.SOURCE_REMOVE;
+					if (isOpen)
 						subMenuItem.menu.actor.vscrollbar_policy = St.PolicyType.AUTOMATIC;
+					this._updateTopScrollbar();
 					return GLib.SOURCE_REMOVE;
 				});
 			});
