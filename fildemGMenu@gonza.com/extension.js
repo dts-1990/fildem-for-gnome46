@@ -14,20 +14,6 @@ import { Extension as GExtension } from "resource:///org/gnome/shell/extensions/
 
 const WinTracker = Shell.WindowTracker.get_default();
 
-// TEMP DIAGNOSTIC: logs any wrapped call that blocks the main loop for
-// more than one frame (~16ms), to find out what's actually causing the
-// Eclipse-only click lag/double-menu reports. Remove once root-caused.
-function _timed(label, fn) {
-	const start = GLib.get_monotonic_time();
-	try {
-		return fn();
-	} finally {
-		const ms = (GLib.get_monotonic_time() - start) / 1000;
-		if (ms > 16)
-			log(`fildemGMenu[timing]: ${label} took ${ms.toFixed(1)}ms`);
-	}
-}
-
 import { FildemGlobalMenuSettings as Settings } from './settings.js';
 import { AppMenu } from 'resource:///org/gnome/shell/ui/appMenu.js';
 import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
@@ -335,8 +321,7 @@ class MenuButton extends PanelMenu.Button {
 		// is what keeps this button visually highlighted ('active' pseudo
 		// class) while its menu is open; overriding the method without
 		// calling super silently dropped that behavior.
-		_timed(`${this._label} super._onOpenStateChanged(${isOpen})`,
-			() => super._onOpenStateChanged(menu, isOpen));
+		super._onOpenStateChanged(menu, isOpen);
 
 		if (isOpen && this.menu.isEmpty())
 			this._menuBar.requestMenuTree(this._label);
@@ -351,16 +336,13 @@ class MenuButton extends PanelMenu.Button {
 			});
 		}
 
-		_timed(`${this._label} onMenuOpenStateChanged`,
-			() => this._menuBar.onMenuOpenStateChanged());
+		this._menuBar.onMenuOpenStateChanged();
 	}
 
 	populateMenu(items) {
-		_timed(`${this._label} populateMenu(${items.length} items)`, () => {
-			this.menu.removeAll();
-			for (let item of items)
-				this._addMenuItem(this.menu, item);
-		});
+		this.menu.removeAll();
+		for (let item of items)
+			this._addMenuItem(this.menu, item);
 	}
 
 	_addMenuItem(parentMenu, item) {
@@ -799,10 +781,6 @@ const MenuBar = class MenuBar {
 	}
 
 	addMenuButton(label, setmargin) {
-		_timed(`addMenuButton(${label})`, () => this._addMenuButton(label, setmargin));
-	}
-
-	_addMenuButton(label, setmargin) {
 		// A previous cycle can leave a stale indicator registered under this
 		// same role (e.g. duplicate top-level labels reported by the app, or
 		// a prior partially-failed removeAll()). addToStatusArea() throws
@@ -1006,14 +984,12 @@ const MenuBar = class MenuBar {
 	}
 
 	removeAll() {
-		_timed(`removeAll(${this._menuButtons.length} buttons)`, () => {
-			for (let e of this._menuButtons) {
-				if (e.menu && e.menu.isOpen)
-					e.menu.close(BoxPointer.PopupAnimation.NONE);
-				e.destroy();
-			}
-			this._menuButtons = [];
-		});
+		for (let e of this._menuButtons) {
+			if (e.menu && e.menu.isOpen)
+				e.menu.close(BoxPointer.PopupAnimation.NONE);
+			e.destroy();
+		}
+		this._menuButtons = [];
 	}
 
 	_onWindowSwitched() {

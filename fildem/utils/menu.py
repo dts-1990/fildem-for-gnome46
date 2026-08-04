@@ -24,7 +24,7 @@ class DbusMenu:
 		self.retry_timer_id = 0
 		self.collect_timer = 0
 		self._menu_model = None
-		self._last_xid = self.window.get_xid()
+		self._last_sent_menus = None
 
 		self._init_window()
 		self._listen_menu_activated()
@@ -40,19 +40,6 @@ class DbusMenu:
 		self._update()
 
 	def on_window_switched(self, window):
-		# BAMF's 'active-window-changed' (X11) can fire repeatedly for the
-		# same window rather than only on a genuine focus change - e.g. on
-		# a title change, which Eclipse triggers constantly while editing
-		# (the unsaved "*file" marker). Rebuilding the whole MenuModel and
-		# re-pushing top-level menus on every one of those spurious
-		# re-announcements churns the GNOME Shell side (tearing down and
-		# rebuilding every menu button several times a minute) for no
-		# reason. Skip the rebuild when it's the same window.
-		xid = window.get_xid()
-		if xid and xid == self._last_xid:
-			return
-		self._last_xid = xid
-
 		self.reset_timeout()
 		self.window = window
 		self._init_window()
@@ -184,8 +171,22 @@ class DbusMenu:
 
 	def _update(self):
 		self._update_menus()
-		self._handle_shortcuts(self._menu_model.top_level_menus)
-		self._send_msg(self._menu_model.top_level_menus)
+		top_level_menus = list(self._menu_model.top_level_menus)
+		self._handle_shortcuts(top_level_menus)
+
+		# BAMF's 'active-window-changed' (X11) fires on more than genuine
+		# focus changes - e.g. on a title change, which Eclipse triggers
+		# constantly while editing (the unsaved "*file" marker) - and a
+		# GTK app's menu is exported at the *application* level, shared by
+		# every one of its top-level windows (e.g. a dialog and its
+		# parent), so switching between two windows of the same app
+		# produces an identical list too. Only push to GNOME Shell (which
+		# tears down and rebuilds every menu button) when the result
+		# actually differs from what's already showing.
+		if top_level_menus == self._last_sent_menus:
+			return
+		self._last_sent_menus = top_level_menus
+		self._send_msg(top_level_menus)
 
 	def _send_msg(self, top_level_menus):
 		if len(top_level_menus) == 0:
