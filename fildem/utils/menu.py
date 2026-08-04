@@ -24,6 +24,7 @@ class DbusMenu:
 		self.retry_timer_id = 0
 		self.collect_timer = 0
 		self._menu_model = None
+		self._last_xid = self.window.get_xid()
 
 		self._init_window()
 		self._listen_menu_activated()
@@ -33,10 +34,25 @@ class DbusMenu:
 		WindowManager.add_listener(self.on_window_switched)
 
 	def _init_window(self):
+		if self._menu_model is not None:
+			self._menu_model.teardown()
 		self._menu_model = MenuModel(self.session, self.window)
 		self._update()
 
 	def on_window_switched(self, window):
+		# BAMF's 'active-window-changed' (X11) can fire repeatedly for the
+		# same window rather than only on a genuine focus change - e.g. on
+		# a title change, which Eclipse triggers constantly while editing
+		# (the unsaved "*file" marker). Rebuilding the whole MenuModel and
+		# re-pushing top-level menus on every one of those spurious
+		# re-announcements churns the GNOME Shell side (tearing down and
+		# rebuilding every menu button several times a minute) for no
+		# reason. Skip the rebuild when it's the same window.
+		xid = window.get_xid()
+		if xid and xid == self._last_xid:
+			return
+		self._last_xid = xid
+
 		self.reset_timeout()
 		self.window = window
 		self._init_window()

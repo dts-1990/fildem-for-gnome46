@@ -54,11 +54,24 @@ class DbusGtkMenu(object):
 			obj       = self.session.get_object(self.bus_name, path)
 			interface = dbus.Interface(obj, dbus_interface='org.gtk.Menus')
 			try:
-				results   = interface.Start([x for x in range(1024)])
-				interface.End([x for x in range(1024)])
+				results = interface.Start([x for x in range(1024)])
 			except Exception:
 				continue
 
+			# Deliberately never call End() here. Start() is the only way
+			# this interface hands back menu content (there's no read-only
+			# "peek"), but a window's app-level menu object
+			# (_GTK_APPLICATION_OBJECT_PATH / _GTK_MENUBAR_OBJECT_PATH) is
+			# shared by every top-level of that app (e.g. a dialog and its
+			# parent window), so switching focus back and forth calls
+			# Start()+End() on the very same shared exporter object over and
+			# over. Only End() can ever underflow the exporter's per-group
+			# refcount ("subscribed >= count" assertion, observed as a hard
+			# crash in Eclipse CDT when bouncing focus between a dialog and
+			# its main window) - Start() alone cannot. Leaving the
+			# subscription open just leaves the refcount incremented for as
+			# long as the app stays open, which is harmless and gets torn
+			# down for free when the exporting app's object goes away.
 			s = interface.connect_to_signal('Changed', self.on_actions_changed)
 			self.signal_matcher.append(s)
 			self.connect_to_actions_iface(obj)
@@ -299,6 +312,7 @@ class DbusAppMenu(object):
 		self.signal_matcher = []
 		if self._update_timer != 0:
 			GLib.source_remove(self._update_timer)
+			self._update_timer = 0
 
 
 class MenuModel:
@@ -371,8 +385,18 @@ class MenuModel:
 				pass
 			print('Gnome HUD: WARNING: (%s) %s' % (promt, alert))
 
-	def __del__(self):
+	def teardown(self):
+		"""
+		connect_to_signal() keeps a strong reference back to the bound
+		method, which chains back to self via self.signal_matcher — a
+		reference cycle that makes __del__ timing non-deterministic. Call
+		this explicitly before dropping a MenuModel (e.g. on window switch)
+		instead of relying on GC to disconnect its D-Bus listeners.
+		"""
 		if self.appmenu is not None:
 			self.appmenu.remove_actions_listener()
 		if self.gtkmenu is not None:
 			self.gtkmenu.remove_actions_listener()
+
+	def __del__(self):
+		self.teardown()

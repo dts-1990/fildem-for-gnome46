@@ -14,6 +14,20 @@ import { Extension as GExtension } from "resource:///org/gnome/shell/extensions/
 
 const WinTracker = Shell.WindowTracker.get_default();
 
+// TEMP DIAGNOSTIC: logs any wrapped call that blocks the main loop for
+// more than one frame (~16ms), to find out what's actually causing the
+// Eclipse-only click lag/double-menu reports. Remove once root-caused.
+function _timed(label, fn) {
+	const start = GLib.get_monotonic_time();
+	try {
+		return fn();
+	} finally {
+		const ms = (GLib.get_monotonic_time() - start) / 1000;
+		if (ms > 16)
+			log(`fildemGMenu[timing]: ${label} took ${ms.toFixed(1)}ms`);
+	}
+}
+
 import { FildemGlobalMenuSettings as Settings } from './settings.js';
 import { AppMenu } from 'resource:///org/gnome/shell/ui/appMenu.js';
 import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
@@ -276,6 +290,20 @@ class MenuButton extends PanelMenu.Button {
 			child: this.menu.box,
 		});
 		topBin.set_child(this._menuScrollView);
+
+		// GNOME animates close() by default (e.g. when the shared
+		// PopupMenuManager hands the grab off to another panel indicator,
+		// like clicking the date/time menu while this one is open). That
+		// fade/scale is cheap for a typical indicator's small menu, but this
+		// menu's content can be much heavier (a deep item tree, accordion
+		// submenus, its own wrapping scrollview above), so the very same
+		// animation has noticeably more to lay out and paint each frame —
+		// felt as lag right when the user is trying to open something else.
+		// The longer that transition window stays open, the more chance
+		// GNOME's grab handoff has to race with it and leave both menus
+		// visible. Always close instantly instead.
+		const animatedClose = this.menu.close.bind(this.menu);
+		this.menu.close = () => animatedClose(BoxPointer.PopupAnimation.NONE);
 	}
 
 	// Only reserve the scrollbar gutter when the top menu's own content
@@ -307,7 +335,8 @@ class MenuButton extends PanelMenu.Button {
 		// is what keeps this button visually highlighted ('active' pseudo
 		// class) while its menu is open; overriding the method without
 		// calling super silently dropped that behavior.
-		super._onOpenStateChanged(menu, isOpen);
+		_timed(`${this._label} super._onOpenStateChanged(${isOpen})`,
+			() => super._onOpenStateChanged(menu, isOpen));
 
 		if (isOpen && this.menu.isEmpty())
 			this._menuBar.requestMenuTree(this._label);
@@ -322,13 +351,16 @@ class MenuButton extends PanelMenu.Button {
 			});
 		}
 
-		this._menuBar.onMenuOpenStateChanged();
+		_timed(`${this._label} onMenuOpenStateChanged`,
+			() => this._menuBar.onMenuOpenStateChanged());
 	}
 
 	populateMenu(items) {
-		this.menu.removeAll();
-		for (let item of items)
-			this._addMenuItem(this.menu, item);
+		_timed(`${this._label} populateMenu(${items.length} items)`, () => {
+			this.menu.removeAll();
+			for (let item of items)
+				this._addMenuItem(this.menu, item);
+		});
 	}
 
 	_addMenuItem(parentMenu, item) {
@@ -708,6 +740,7 @@ const MenuBar = class MenuBar {
 		this._width_offset = 300;
 		this.MARGIN_FIRST_ELEMENT = 4;
 		this._isShowingMenu = false;
+		this._pendingMenus = null;
 
 		this._cache = new Cache();
 		this._lastFocusAppId = null;
@@ -766,6 +799,10 @@ const MenuBar = class MenuBar {
 	}
 
 	addMenuButton(label, setmargin) {
+		_timed(`addMenuButton(${label})`, () => this._addMenuButton(label, setmargin));
+	}
+
+	_addMenuButton(label, setmargin) {
 		// A previous cycle can leave a stale indicator registered under this
 		// same role (e.g. duplicate top-level labels reported by the app, or
 		// a prior partially-failed removeAll()). addToStatusArea() throws
@@ -800,6 +837,20 @@ const MenuBar = class MenuBar {
 	}
 
 	setMenus(menus) {
+		// setMenus() can be invoked at any time by a fresh SendTopLevelMenus
+		// D-Bus push (e.g. Eclipse re-announcing its menus on internal state
+		// changes), not just on window switch. removeAll() below destroys
+		// every button, including one the user currently has open or is
+		// mid-click on. Destroying a menu's actor while GNOME's shared
+		// PopupMenuManager is in the middle of handing its grab off to
+		// another panel indicator (e.g. the user simultaneously clicking the
+		// date/time menu) can corrupt that handoff, intermittently leaving
+		// both menus visible at once. Defer the rebuild until nothing of
+		// ours is open.
+		if (this._isShowingMenu) {
+			this._pendingMenus = menus;
+			return;
+		}
 		// The expansion/shrink can be annoying, so we only do it
 		// when there’s no menus
 		if (menus.length === 0) {
@@ -859,6 +910,11 @@ const MenuBar = class MenuBar {
 			(this._titleIndicator && this._titleIndicator.isOpen());
 		if (!this._isShowingMenu) {
 			this._onPanelLeave();
+			if (this._pendingMenus) {
+				const menus = this._pendingMenus;
+				this._pendingMenus = null;
+				this.setMenus(menus);
+			}
 			// _onWindowSwitched() skips its rebuild while a menu is open,
 			// so catch up here in case a real focus change happened
 			// (or was triggered by the menu's own modal grab) meanwhile.
@@ -950,12 +1006,14 @@ const MenuBar = class MenuBar {
 	}
 
 	removeAll() {
-		for (let e of this._menuButtons) {
-			if (e.menu && e.menu.isOpen)
-				e.menu.close(BoxPointer.PopupAnimation.NONE);
-			e.destroy();
-		}
-		this._menuButtons = [];
+		_timed(`removeAll(${this._menuButtons.length} buttons)`, () => {
+			for (let e of this._menuButtons) {
+				if (e.menu && e.menu.isOpen)
+					e.menu.close(BoxPointer.PopupAnimation.NONE);
+				e.destroy();
+			}
+			this._menuButtons = [];
+		});
 	}
 
 	_onWindowSwitched() {
