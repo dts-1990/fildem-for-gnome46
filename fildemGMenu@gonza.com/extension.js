@@ -766,13 +766,37 @@ const MenuBar = class MenuBar {
 	}
 
 	addMenuButton(label, setmargin) {
+		// A previous cycle can leave a stale indicator registered under this
+		// same role (e.g. duplicate top-level labels reported by the app, or
+		// a prior partially-failed removeAll()). addToStatusArea() throws
+		// "Extension point conflict" if the role is already taken, which
+		// (uncaught) used to abort the whole window-switch handler midway
+		// and permanently wedge it. Clear out any stale entry first.
+		let stale = Main.panel.statusArea[label];
+		if (stale) {
+			// It may still be sitting in _menuButtons (e.g. added earlier in
+			// this very setMenus() loop, if the app reported a duplicate
+			// label). Leaving a disposed actor in that array crashes the
+			// requestMenuTree loop right after, aborting the whole build.
+			const idx = this._menuButtons.indexOf(stale);
+			if (idx !== -1)
+				this._menuButtons.splice(idx, 1);
+			stale.destroy();
+		}
+
 		let menuButton = new MenuButton(label, this);
-		this._menuButtons.push(menuButton);
 		const nItems = Main.panel._leftBox.get_children().length;
 		menuButton.hide();
 		if (setmargin)
 			menuButton.set_style('margin-left: '+ this.MARGIN_FIRST_ELEMENT + 'px')
-		Main.panel.addToStatusArea(label, menuButton, nItems, 'left');
+		try {
+			Main.panel.addToStatusArea(label, menuButton, nItems, 'left');
+		} catch (e) {
+			logError(e, `fildemGMenu: failed to add menu button for "${label}"`);
+			menuButton.destroy();
+			return;
+		}
+		this._menuButtons.push(menuButton);
 	}
 
 	setMenus(menus) {
@@ -782,6 +806,11 @@ const MenuBar = class MenuBar {
 			this._hideMenu();
 		}
 		this.removeAll();
+		// Some apps (e.g. Eclipse) report the same top-level label twice —
+		// it exposes overlapping menu content via both its app-menu and
+		// menubar D-Bus paths. Building a button per duplicate just churns
+		// through the dangling-reference case above for no benefit.
+		menus = [...new Set(menus)];
 		let first = true;
 		for (let menu of menus) {
 			this.addMenuButton(menu, first);
@@ -950,6 +979,27 @@ const MenuBar = class MenuBar {
 		}
 		this._switchingWindow = true;
 
+		try {
+			this._doWindowSwitched();
+		} catch (e) {
+			logError(e, 'fildemGMenu: _onWindowSwitched failed');
+		} finally {
+			this._switchingWindow = false;
+			if (this._pendingWindowSwitch) {
+				this._pendingWindowSwitch = false;
+				GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+					this._onWindowSwitched();
+					return GLib.SOURCE_REMOVE;
+				});
+			}
+		}
+	}
+
+	// An uncaught exception here must never leave _switchingWindow stuck
+	// true — that would permanently short-circuit every future focus change
+	// via the guard above, silently freezing the menu bar and the app
+	// name/icon indicator. See the try/finally in _onWindowSwitched().
+	_doWindowSwitched() {
 		this._restoreLabel();
 		const overview = Main.overview.visibleTarget;
 		const focusApp = WinTracker.focus_app || Main.panel.statusArea.appMenu?._targetApp;
@@ -1007,14 +1057,6 @@ const MenuBar = class MenuBar {
 		}
 
 		this._lastFocusAppId = appId;
-		this._switchingWindow = false;
-		if (this._pendingWindowSwitch) {
-			this._pendingWindowSwitch = false;
-			GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-				this._onWindowSwitched();
-				return GLib.SOURCE_REMOVE;
-			});
-		}
 	}
 
 	_onOverviewOpened() {
