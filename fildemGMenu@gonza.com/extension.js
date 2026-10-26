@@ -478,6 +478,60 @@ const Cache = class Cache {
 }
 
 /**
+ * GNOME's AppMenu (New Window, app actions, App Details, Quit) plus the
+ * titlebar right-click actions for the tracked window. The window section
+ * is filled by the Shell's own WindowMenu builder, so it stays identical
+ * to the titlebar menu. It's rebuilt on every open so state-dependent
+ * entries (Restore/Maximize, the check marks, workspace neighbours)
+ * reflect the window as it is right now.
+ */
+class WindowAppMenu extends AppMenu {
+	constructor(sourceActor, getWindow) {
+		super(sourceActor);
+		this._getWindow = getWindow;
+
+		this._winControlsSection = new PopupMenu.PopupMenuSection();
+		this.addMenuItem(this._winControlsSection, 0);
+		this._winControlsSeparator = new PopupMenu.PopupSeparatorMenuItem();
+		this.addMenuItem(this._winControlsSeparator, 1);
+	}
+
+	open(animate) {
+		this._buildWindowControls();
+		super.open(animate);
+	}
+
+	_buildWindowControls() {
+		let section = this._winControlsSection;
+		section.removeAll();
+
+		let window = this._getWindow();
+		this._winControlsSeparator.visible = !!window;
+		if (!window)
+			return;
+
+		// _buildMenu() only needs addAction()/addMenuItem(), which a
+		// PopupMenuSection has too. It's private Shell API, so if a future
+		// GNOME changes it, fall back to an app-menu-only popup.
+		try {
+			WindowMenu.WindowMenu.prototype._buildMenu.call(section, window);
+		} catch (e) {
+			logError(e, 'Could not build window controls');
+			section.removeAll();
+			this._winControlsSeparator.visible = false;
+			return;
+		}
+
+		// WindowMenu's own addAction() override sets Ornament.NONE, which
+		// a section's doesn't; without it the ✓ items misalign.
+		for (let item of section._getMenuItems()) {
+			if (item._ornament === PopupMenu.Ornament.HIDDEN)
+				item.setOrnament(PopupMenu.Ornament.NONE);
+		}
+	}
+}
+
+/**
  * Shows the focused app's icon + name + window title, to the left of the
  * menu buttons — replaces needing a separate "window title" extension,
  * and (unlike a standalone extension listening to notify::focus-window on
@@ -495,7 +549,7 @@ class WindowTitleIndicator extends PanelMenu.Button {
 		// MenuBar right after construction) registers this.menu with
 		// Main.panel.menuManager automatically — an extra manual addMenu()
 		// call here double-registers it and made the first click a no-op.
-		this._appMenu = new AppMenu(this);
+		this._appMenu = new WindowAppMenu(this, () => this._trackedWindow);
 		this.setMenu(this._appMenu);
 		// Opening this pushes a modal too, so it must feed into the same
 		// "a menu is open" bookkeeping as the File/Edit/... buttons, or
